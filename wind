@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Terminal wind scraper for windguru.cz: live station + GFS forecast.
+
+Row 1: current wind at each spot (windguru weather stations).
+Then per spot: today's remaining hours, then 4 day summaries.
+"""
+import json, sys, urllib.request, datetime as dt
+
+SPOTS = [
+    # label, id_spot, id_station
+    ("Bat Galim", 885332, 2049),
+    ("Caesarea",  910318, 2259),
+]
+TZ = dt.timezone(dt.timedelta(hours=3))  # ponytail: Israel is UTC+3 in summer,
+# UTC+2 in winter. Swap for zoneinfo("Asia/Jerusalem") if you run this in January.
+GFS = 3
+DAY_START, DAY_END = 8, 19  # local hours counted in a day summary
+UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.windguru.cz/"}
+
+C = {"dim": "\033[2m", "grn": "\033[32m", "yel": "\033[33m", "red": "\033[31m",
+     "mag": "\033[35m", "bold": "\033[1m", "off": "\033[0m"}
+
+
+def get(**params):
+    url = "https://www.windguru.cz/int/iapi.php?" + "&".join(f"{k}={v}" for k, v in params.items())
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=15) as r:
+        return json.load(r)
+
+
+def compass(deg):
+    pts = "N NE E SE S SW W NW".split()
+    return pts[int((deg % 360) / 45 + 0.5) % 8]
+
+
+def arrow(deg):
+    # points where the wind blows TO (deg is where it comes FROM)
+    return "↓↙←↖↑↗→↘"[int((deg % 360) / 45 + 0.5) % 8]
+
+
+def paint(kt):
+    if kt is None:
+        return "dim"
+    if kt < 8:
+        return "dim"
+    if kt < 15:
+        return "grn"
+    if kt < 23:
+        return "yel"
+    if kt < 32:
+        return "red"
+    return "mag"
+
+
+def col(s, key):
+    return f"{C[key]}{s}{C['off']}"
+
+
+def forecast(id_spot):
+    meta = get(q="forecast_spot", id_spot=id_spot)
+    tab = meta["tabs"][0]
+    m = next(x for x in tab["id_model_arr"] if x["id_model"] == GFS)
+    f = get(q="forecast", id_model=GFS, id_spot=id_spot, initstr=m["initstr"],
+            rundef=m["rundef"].split("-")[0], cachefix=m["cachefix"],
+            WINDSPD=1, GUST=1, SMER=1)["fcst"]
+    base = dt.datetime.fromtimestamp(f["initstamp"], TZ)
+    return [{"t": base + dt.timedelta(hours=h), "spd": f["WINDSPD"][i],
+             "gust": f["GUST"][i], "dir": f["WINDDIR"][i]}
+            for i, h in enumerate(f["hours"])]
+
+
+def day_summary(rows, day):
+    d = [r for r in rows if r["t"].date() == day and DAY_START <= r["t"].hour <= DAY_END]
+    if not d:
+        return None
+    peak = max(d, key=lambda r: r["gust"])
+    return {"lo": min(r["spd"] for r in d), "hi": max(r["spd"] for r in d),
+            "gust": peak["gust"], "dir": peak["dir"]}
+
+
+def main():
+    width = 4
+    print()
+    for label, id_spot, id_station in SPOTS:
+        s = get(q="station_data_current", id_station=id_station)
+        if s.get("wind_avg") is None:
+            print(f"  {C['bold']}{label:<10}{C['off']} {col('no live data', 'dim')}")
+            continue
+        avg, gust = s["wind_avg"], s["wind_max"]
+        print(f"  {C['bold']}{label:<10}{C['off']} "
+              f"{col(f'{avg:>5.1f} kt', paint(avg))} "
+              f"{col(f'g{gust:.1f}', paint(gust)):<12} "
+              f"{arrow(s['wind_direction'])} {compass(s['wind_direction'])}"
+              f"{s['wind_direction']:>4}°  {s['temperature']:.0f}°C"
+              f"  {col(s['datetime'][11:16], 'dim')}")
+
+    now = dt.datetime.now(TZ)
+    for label, id_spot, _ in SPOTS:
+        rows = forecast(id_spot)
+        today = [r for r in rows if r["t"].date() == now.date() and r["t"].hour >= now.hour]
+        print(f"\n  {C['bold']}{label}{C['off']}  {col('today', 'dim')}")
+        print("   " + "".join(f"{r['t'].hour:>{width}}" for r in today))
+        print("   " + "".join(col(f"{r['spd']:>{width}.0f}", paint(r["spd"])) for r in today))
+        print("   " + col("".join(f"{r['gust']:>{width}.0f}" for r in today), "dim"))
+        print("   " + "".join(f"{arrow(r['dir']):>{width}}" for r in today))
+
+        parts = []
+        for n in range(1, 5):
+            day = now.date() + dt.timedelta(days=n)
+            d = day_summary(rows, day)
+            if not d:
+                continue
+            parts.append(f"{day.strftime('%a')} "
+                         + col(f"{d['lo']:.0f}-{d['hi']:.0f}", paint(d["hi"]))
+                         + col(f"g{d['gust']:.0f}", "dim")
+                         + f" {compass(d['dir'])}")
+        print("   " + "  ".join(parts))
+    print()
+
+
+def selftest():
+    assert compass(0) == "N" and compass(189) == "S" and compass(350) == "N"
+    assert compass(45) == "NE" and compass(280) == "W"
+    assert arrow(0) == "↓" and arrow(180) == "↑"
+    assert paint(5) == "dim" and paint(10) == "grn" and paint(20) == "yel"
+    assert paint(25) == "red" and paint(40) == "mag" and paint(None) == "dim"
+    t = dt.datetime(2026, 8, 30, tzinfo=TZ)
+    rows = [{"t": t + dt.timedelta(hours=h), "spd": h, "gust": h * 2, "dir": 180}
+            for h in range(24)]
+    d = day_summary(rows, t.date())
+    assert (d["lo"], d["hi"], d["gust"]) == (8, 19, 38), d
+    assert day_summary(rows, t.date() + dt.timedelta(days=3)) is None
+    print("ok")
+
+
+if __name__ == "__main__":
+    selftest() if "--selftest" in sys.argv else main()
