@@ -26,10 +26,13 @@ direction at that peak.
 ```sh
 ./wind            # print and exit
 ./wind --selftest # assert the pure helpers still behave
-watch -n 300 ./wind
+watch -c -n 30 ./wind   # live, refreshing every 30s
 ```
 
 Python 3 stdlib only, no dependencies.
+
+The forecast is cached in `$TMPDIR` for 15 minutes, so a 30s `watch` only
+re-hits the live station. Delete `/tmp/wind-fcst-*.json` to force a refetch.
 
 ## Adding a spot
 

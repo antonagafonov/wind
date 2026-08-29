@@ -4,7 +4,7 @@
 Row 1: current wind at each spot (windguru weather stations).
 Then per spot: today's remaining hours, then 4 day summaries.
 """
-import json, sys, urllib.request, datetime as dt
+import json, pathlib, sys, tempfile, time, urllib.request, datetime as dt
 
 SPOTS = [
     # label, id_spot, id_station
@@ -55,13 +55,25 @@ def col(s, key):
     return f"{C[key]}{s}{C['off']}"
 
 
+FCST_TTL = 900  # ponytail: GFS publishes every 6h; 15 min is plenty fresh and
+# keeps `watch -n 30 wind` from hammering windguru for data that has not moved.
+
+
 def forecast(id_spot):
+    cache = pathlib.Path(tempfile.gettempdir()) / f"wind-fcst-{id_spot}.json"
+    if cache.exists() and time.time() - cache.stat().st_mtime < FCST_TTL:
+        return decode(json.loads(cache.read_text()))
     meta = get(q="forecast_spot", id_spot=id_spot)
     tab = meta["tabs"][0]
     m = next(x for x in tab["id_model_arr"] if x["id_model"] == GFS)
     f = get(q="forecast", id_model=GFS, id_spot=id_spot, initstr=m["initstr"],
             rundef=m["rundef"].split("-")[0], cachefix=m["cachefix"],
             WINDSPD=1, GUST=1, SMER=1)["fcst"]
+    cache.write_text(json.dumps(f))
+    return decode(f)
+
+
+def decode(f):
     base = dt.datetime.fromtimestamp(f["initstamp"], TZ)
     return [{"t": base + dt.timedelta(hours=h), "spd": f["WINDSPD"][i],
              "gust": f["GUST"][i], "dir": f["WINDDIR"][i]}
@@ -129,6 +141,10 @@ def selftest():
     d = day_summary(rows, t.date())
     assert (d["lo"], d["hi"], d["gust"]) == (8, 19, 38), d
     assert day_summary(rows, t.date() + dt.timedelta(days=3)) is None
+    f = {"initstamp": int(t.timestamp()), "hours": [0, 1],
+         "WINDSPD": [5, 6], "GUST": [9, 10], "WINDDIR": [180, 190]}
+    got = decode(f)
+    assert got[0]["t"] == t and got[1]["spd"] == 6 and got[1]["dir"] == 190, got
     print("ok")
 
 
