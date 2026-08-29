@@ -26,11 +26,16 @@ direction at that peak.
 ## Use
 
 ```sh
-./wind             # print and exit
-./wind --watch     # live, repaint every 30s, q to quit
-./wind --watch 10  # ...every 10s
-./wind --selftest  # assert the pure helpers still behave
+./wind                  # all spots, print and exit
+./wind bat cae          # just Bat Galim and Caesarea
+./wind tel --watch 15   # Tel Aviv, live, repaint every 15s
+./wind --watch          # all spots, live, 30s
+./wind --help
+./wind --selftest       # assert the pure helpers still behave
 ```
+
+Spot arguments are case-insensitive substrings of the label, so `bat`, `Bat`
+and `galim` all pick Bat Galim.
 
 `--watch` quits on `q`, Esc or Ctrl-C. Piped or run without a tty it just loops
 and prints, so `./wind --watch 60 >> wind.log` works too.

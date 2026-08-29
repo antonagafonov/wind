@@ -14,7 +14,6 @@ SPOTS = [
     ("Tel Aviv", 1084913, 3169),
     ("Ashdod",   1118129, 3444),
 ]
-LW = max(len(label) for label, _, _ in SPOTS)
 TZ = dt.timezone(dt.timedelta(hours=3))  # ponytail: Israel is UTC+3 in summer,
 # UTC+2 in winter. Swap for zoneinfo("Asia/Jerusalem") if you run this in January.
 GFS = 3
@@ -93,16 +92,17 @@ def day_summary(rows, day):
             "gust": peak["gust"], "dir": peak["dir"]}
 
 
-def render():
+def render(spots):
     width = 4
+    lw = max(len(label) for label, _, _ in spots)
     out = [""]
-    for label, id_spot, id_station in SPOTS:
+    for label, id_spot, id_station in spots:
         s = get(q="station_data_current", id_station=id_station) if id_station else {}
         if s.get("wind_avg") is None:
-            out.append(f"  {C['bold']}{label:<{LW}}{C['off']} {col('no live data', 'dim')}")
+            out.append(f"  {C['bold']}{label:<{lw}}{C['off']} {col('no live data', 'dim')}")
             continue
         avg, gust = s["wind_avg"], s["wind_max"]
-        out.append(f"  {C['bold']}{label:<{LW}}{C['off']} "
+        out.append(f"  {C['bold']}{label:<{lw}}{C['off']} "
                    f"{col(f'{avg:>5.1f} kt', paint(avg))} "
                    f"{col(f'g{gust:.1f}', paint(gust)):<12} "
                    f"{arrow(s['wind_direction'])} {compass(s['wind_direction'])}"
@@ -110,7 +110,7 @@ def render():
                    f"  {col(s['datetime'][11:16], 'dim')}")
 
     now = dt.datetime.now(TZ)
-    for label, id_spot, _ in SPOTS:
+    for label, id_spot, _ in spots:
         rows = forecast(id_spot)
         today = [r for r in rows if r["t"].date() == now.date() and r["t"].hour >= now.hour]
         out.append(f"\n  {C['bold']}{label}{C['off']}  {col('today', 'dim')}")
@@ -133,19 +133,41 @@ def render():
     return "\n".join(out) + "\n"
 
 
-def watch(interval):
+USAGE = f"""usage: wind [SPOT...] [--watch [SECONDS]]
+
+  SPOT      any part of the name, case-insensitive; repeat to pick several.
+            known: {', '.join(label for label, _, _ in SPOTS)}
+  --watch   repaint every SECONDS (default 30); q, Esc or Ctrl-C quits.
+
+  wind                      all spots, print once
+  wind bat cae              just Bat Galim and Caesarea
+  wind tel --watch 15       Tel Aviv, live
+"""
+
+
+def pick(names):
+    """Filter SPOTS by case-insensitive substring. Empty names -> everything."""
+    if not names:
+        return list(SPOTS)
+    out = [s for s in SPOTS if any(n.lower() in s[0].lower() for n in names)]
+    if not out:
+        raise SystemExit(f"no spot matches {' '.join(names)}\n\n{USAGE}")
+    return out
+
+
+def watch(spots, interval):
     """Repaint every `interval` seconds until q (or Ctrl-C)."""
     fd = sys.stdin.fileno()
     if not os.isatty(fd):  # ponytail: piped or in a cron job, no keys to read
         while True:
-            print(render(), flush=True)
+            print(render(spots), flush=True)
             time.sleep(interval)
     saved = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
         sys.stdout.write("\033[?25l")
         while True:
-            frame = render()  # fetch first, so the screen is only blank while painting
+            frame = render(spots)  # fetch first, so the screen is only blank while painting
             clock = dt.datetime.now(TZ).strftime("%H:%M:%S")
             sys.stdout.write("\033[H\033[2J" + frame
                              + col(f"   {clock} · every {interval:g}s · q to quit\n", "dim"))
@@ -162,11 +184,18 @@ def watch(interval):
 
 
 def main(argv):
+    if {"-h", "--help"} & set(argv):
+        print(USAGE, end="")
+        return
+    interval = None
     if "--watch" in argv:
-        rest = argv[argv.index("--watch") + 1:]
-        watch(float(rest[0]) if rest and rest[0][0].isdigit() else 30)
-    else:
-        print(render(), end="")
+        i = argv.index("--watch")
+        argv.pop(i)
+        interval = 30
+        if i < len(argv) and argv[i].replace(".", "", 1).isdigit():
+            interval = float(argv.pop(i))
+    spots = pick([a for a in argv if not a.startswith("-")])
+    watch(spots, interval) if interval else print(render(spots), end="")
 
 
 def selftest():
@@ -185,6 +214,16 @@ def selftest():
          "WINDSPD": [5, 6], "GUST": [9, 10], "WINDDIR": [180, 190]}
     got = decode(f)
     assert got[0]["t"] == t and got[1]["spd"] == 6 and got[1]["dir"] == 190, got
+    assert pick([]) == list(SPOTS)
+    assert [x[0] for x in pick(["bat", "cae"])] == ["Bat Galim", "Caesarea"]
+    assert [x[0] for x in pick(["ASHDOD"])] == ["Ashdod"]
+    assert [x[0] for x in pick(["a"])] == [s[0] for s in SPOTS]  # substring, not prefix
+    try:
+        pick(["nope"])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("pick should exit on no match")
     print("ok")
 
 
