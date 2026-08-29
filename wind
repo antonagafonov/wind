@@ -143,8 +143,9 @@ def watch(interval):
         sys.stdout.write("\033[?25l")
         while True:
             frame = render()  # fetch first, so the screen is only blank while painting
+            clock = dt.datetime.now(TZ).strftime("%H:%M:%S")
             sys.stdout.write("\033[H\033[2J" + frame
-                             + col(f"   q to quit · {interval}s\n", "dim"))
+                             + col(f"   {clock} · every {interval:g}s · q to quit\n", "dim"))
             sys.stdout.flush()
             if select.select([sys.stdin], [], [], interval)[0]:
                 if sys.stdin.read(1) in ("q", "Q", "\x03", "\x1b"):
