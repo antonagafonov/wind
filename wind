@@ -8,10 +8,13 @@ import json, os, pathlib, select, sys, tempfile, termios, time, tty
 import urllib.request, datetime as dt
 
 SPOTS = [
-    # label, id_spot, id_station
+    # label, id_spot, id_station (None = forecast only)
     ("Bat Galim", 885332, 2049),
     ("Caesarea",  910318, 2259),
+    ("Tel Aviv", 1084913, 3169),
+    ("Ashdod",   1118129, 3444),
 ]
+LW = max(len(label) for label, _, _ in SPOTS)
 TZ = dt.timezone(dt.timedelta(hours=3))  # ponytail: Israel is UTC+3 in summer,
 # UTC+2 in winter. Swap for zoneinfo("Asia/Jerusalem") if you run this in January.
 GFS = 3
@@ -94,12 +97,12 @@ def render():
     width = 4
     out = [""]
     for label, id_spot, id_station in SPOTS:
-        s = get(q="station_data_current", id_station=id_station)
+        s = get(q="station_data_current", id_station=id_station) if id_station else {}
         if s.get("wind_avg") is None:
-            out.append(f"  {C['bold']}{label:<10}{C['off']} {col('no live data', 'dim')}")
+            out.append(f"  {C['bold']}{label:<{LW}}{C['off']} {col('no live data', 'dim')}")
             continue
         avg, gust = s["wind_avg"], s["wind_max"]
-        out.append(f"  {C['bold']}{label:<10}{C['off']} "
+        out.append(f"  {C['bold']}{label:<{LW}}{C['off']} "
                    f"{col(f'{avg:>5.1f} kt', paint(avg))} "
                    f"{col(f'g{gust:.1f}', paint(gust)):<12} "
                    f"{arrow(s['wind_direction'])} {compass(s['wind_direction'])}"

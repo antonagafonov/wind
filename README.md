@@ -6,8 +6,10 @@ readings plus GFS forecast for Bat Galim (Haifa) and Caesarea.
 ```
 $ wind
 
-  Bat Galim    8.1 kt g11.9  ↑ S 176°  29°C  09:08
-  Caesarea    11.8 kt g15.7  ↑ S 196°  27°C  09:09
+  Bat Galim   7.6 kt g11.9  ↗ SW 219°  31°C  09:52
+  Caesarea   14.2 kt g17.1  ↑ S  198°  28°C  09:53
+  Tel Aviv    5.4 kt  g9.3  ↖ SE 154°  26°C  09:54
+  Ashdod      5.4 kt  g8.2  ↖ SE 148°  26°C  09:54
 
   Bat Galim  today
       9  10  11  12  13  14  15  16  17  18  19  20  21  22  23
@@ -48,5 +50,9 @@ curl -s -H 'Referer: https://www.windguru.cz/' \
   'https://www.windguru.cz/int/iapi.php?q=spot&id_spot=<id_spot>' | python3 -m json.tool
 ```
 
-`station.id_station` is the live station, if the spot has one. Spots without a
-station print `no live data` and still show a forecast.
+`station.id_station` is the live station, if the spot has one. Use `None` for a
+spot with no station — it prints `no live data` and still shows a forecast.
+
+Not every named spot has one. Of the Israeli spots checked: Bat Galim 2049,
+Caesarea/Freegull 2259, Tel Aviv ims 3169, Ashdod port ims 3444 all report;
+plain `Tel-Aviv` (308), `ashdod` (95740) and most others are forecast-only.
