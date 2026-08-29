@@ -15,6 +15,8 @@ SPOTS = [
     ("Ashdod",   1118129, 3444),
 ]
 DEFAULT = ["Bat Galim", "Caesarea"]  # shown when no spot is named
+ALERT_KT = 15          # --alert fires at or above this (avg or gust)
+ALERT_COOLDOWN = 3 * 3600  # ...and then stays quiet this long for that spot
 TZ = dt.timezone(dt.timedelta(hours=3))  # ponytail: Israel is UTC+3 in summer,
 # UTC+2 in winter. Swap for zoneinfo("Asia/Jerusalem") if you run this in January.
 GFS = 3
@@ -63,6 +65,10 @@ FCST_TTL = 900  # ponytail: GFS publishes every 6h; 15 min is plenty fresh and
 # keeps `watch -n 30 wind` from hammering windguru for data that has not moved.
 
 
+def station(id_station):
+    return get(q="station_data_current", id_station=id_station) if id_station else {}
+
+
 def forecast(id_spot):
     cache = pathlib.Path(tempfile.gettempdir()) / f"wind-fcst-{id_spot}.json"
     if cache.exists() and time.time() - cache.stat().st_mtime < FCST_TTL:
@@ -98,7 +104,7 @@ def render(spots):
     lw = max(len(label) for label, _, _ in spots)
     out = [""]
     for label, id_spot, id_station in spots:
-        s = get(q="station_data_current", id_station=id_station) if id_station else {}
+        s = station(id_station)
         if s.get("wind_avg") is None:
             out.append(f"  {C['bold']}{label:<{lw}}{C['off']} {col('no live data', 'dim')}")
             continue
@@ -134,16 +140,19 @@ def render(spots):
     return "\n".join(out) + "\n"
 
 
-USAGE = f"""usage: wind [SPOT...] [-a] [--watch [SECONDS]]
+USAGE = f"""usage: wind [SPOT...] [-a] [--watch [SECONDS]] [--alert [KT]]
 
   SPOT      any part of the name, case-insensitive; repeat to pick several.
             known: {', '.join(label for label, _, _ in SPOTS)}
   -a/--all  every spot, not just the default {' + '.join(DEFAULT)}.
   --watch   repaint every SECONDS (default 30); q, Esc or Ctrl-C quits.
+  --alert   check once and Telegram any spot at or above KT (default {ALERT_KT:g});
+            prints what it sent and exits. Built for cron.
 
   wind                      {' and '.join(DEFAULT)}, print once
   wind -a                   all spots
   wind tel --watch 15       Tel Aviv, live
+  wind -a --alert 18        ping Telegram if anywhere is over 18 kt
 """
 
 
@@ -155,6 +164,73 @@ def pick(names, show_all=False):
     if not out:
         raise SystemExit(f"no spot matches {' '.join(names)}\n\n{USAGE}")
     return out
+
+
+def tg_config():
+    """Bot token and chat id from the environment, or ~/.config/wind/telegram.env."""
+    env = dict(os.environ)
+    cfg = (pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
+           / "wind" / "telegram.env")
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env.setdefault(k.strip(), v.strip().strip("\"'"))
+    token, chat = env.get("WIND_TG_TOKEN"), env.get("WIND_TG_CHAT")
+    if not token or not chat:
+        raise SystemExit(
+            f"set WIND_TG_TOKEN and WIND_TG_CHAT, or put them in {cfg}\n"
+            "  WIND_TG_TOKEN=123456:AA...   (from @BotFather)\n"
+            "  WIND_TG_CHAT=@windchannel    (or the numeric -100... id)")
+    return token, chat
+
+
+def telegram(text):
+    token, chat = tg_config()
+    body = json.dumps({"chat_id": chat, "text": text}).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                 data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+
+def should_alert(state, label, kt, now, threshold, cooldown):
+    """True on a rising edge, or once per cooldown while still blowing.
+
+    `state` maps label -> last alert time; mutated in place. Dropping below the
+    threshold clears it, so the next gust alerts immediately.
+    """
+    if kt < threshold:
+        state.pop(label, None)
+        return False
+    last = state.get(label)
+    if last is not None and now - last < cooldown:
+        return False
+    state[label] = now
+    return True
+
+
+def alert(spots, threshold):
+    cache = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache"))
+    cache.mkdir(parents=True, exist_ok=True)
+    statef = cache / "wind-alerts.json"
+    state = json.loads(statef.read_text()) if statef.exists() else {}
+    now = time.time()
+    sent = []
+    for label, _, id_station in spots:
+        s = station(id_station)
+        if s.get("wind_avg") is None:
+            continue
+        kt = max(s["wind_avg"], s["wind_max"])
+        if should_alert(state, label, kt, now, threshold, ALERT_COOLDOWN):
+            d = s["wind_direction"]
+            telegram(f"\U0001F32C {label}: {s['wind_avg']:.1f} kt, gusting "
+                     f"{s['wind_max']:.1f} \u00b7 {compass(d)} {d}\u00b0 \u00b7 "
+                     f"{s['temperature']:.0f}\u00b0C \u00b7 {s['datetime'][11:16]}")
+            sent.append(label)
+    statef.write_text(json.dumps(state))
+    print(f"alerted: {', '.join(sent)}" if sent else f"nothing at or above {threshold:g} kt")
 
 
 def watch(spots, interval):
@@ -189,6 +265,13 @@ def main(argv):
     if {"-h", "--help"} & set(argv):
         print(USAGE, end="")
         return
+    threshold = None
+    if "--alert" in argv:
+        i = argv.index("--alert")
+        argv.pop(i)
+        threshold = ALERT_KT
+        if i < len(argv) and argv[i].replace(".", "", 1).isdigit():
+            threshold = float(argv.pop(i))
     interval = None
     if "--watch" in argv:
         i = argv.index("--watch")
@@ -198,7 +281,12 @@ def main(argv):
             interval = float(argv.pop(i))
     show_all = bool({"-a", "--all"} & set(argv))
     spots = pick([a for a in argv if not a.startswith("-")], show_all)
-    watch(spots, interval) if interval else print(render(spots), end="")
+    if threshold is not None:
+        alert(spots, threshold)
+    elif interval:
+        watch(spots, interval)
+    else:
+        print(render(spots), end="")
 
 
 def selftest():
@@ -228,6 +316,12 @@ def selftest():
         pass
     else:
         raise AssertionError("pick should exit on no match")
+    st, now = {}, 1000.0
+    assert should_alert(st, "X", 20, now, 15, 3600) is True      # rising edge
+    assert should_alert(st, "X", 20, now + 60, 15, 3600) is False  # still blowing
+    assert should_alert(st, "X", 20, now + 4000, 15, 3600) is True  # cooldown passed
+    assert should_alert(st, "X", 9, now + 4100, 15, 3600) is False and st == {}
+    assert should_alert(st, "X", 20, now + 4200, 15, 3600) is True  # dropped, re-arms
     print("ok")
 
 

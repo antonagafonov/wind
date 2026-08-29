@@ -30,6 +30,8 @@ direction at that peak.
 ./wind -a               # all four spots
 ./wind tel --watch 15   # Tel Aviv, live, repaint every 15s
 ./wind --watch          # the default two, live, 30s
+./wind --alert          # Telegram anything at or above 15 kt, then exit
+./wind -a --alert 18    # ...all spots, 18 kt
 ./wind --help
 ./wind --selftest       # assert the pure helpers still behave
 ```
@@ -62,3 +64,31 @@ spot with no station — it prints `no live data` and still shows a forecast.
 Not every named spot has one. Of the Israeli spots checked: Bat Galim 2049,
 Caesarea/Freegull 2259, Tel Aviv ims 3169, Ashdod port ims 3444 all report;
 plain `Tel-Aviv` (308), `ashdod` (95740) and most others are forecast-only.
+
+## Telegram alerts
+
+`--alert [KT]` checks the live stations once, sends a Telegram message for any
+spot at or above the threshold (default 15 kt, avg **or** gust), and exits. It
+prints what it sent, so it is safe to run from cron:
+
+```cron
+*/10 6-20 * * * /home/you/github/wind/wind -a --alert >> /tmp/wind-alert.log 2>&1
+```
+
+Credentials come from the environment, or from `~/.config/wind/telegram.env`:
+
+```sh
+mkdir -p ~/.config/wind
+cat > ~/.config/wind/telegram.env <<'EOF'
+WIND_TG_TOKEN=123456:AA...      # from @BotFather
+WIND_TG_CHAT=@yourchannel       # or the numeric -100... id
+EOF
+chmod 600 ~/.config/wind/telegram.env
+```
+
+Add the bot to the channel as an admin, otherwise Telegram rejects the send.
+
+To stop it nagging: one alert per spot, then silence for 3 hours
+(`ALERT_COOLDOWN`). If the wind drops back under the threshold the spot re-arms
+immediately, so a new build gets its own message. State lives in
+`~/.cache/wind-alerts.json` — delete it to reset.
