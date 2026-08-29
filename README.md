@@ -24,14 +24,18 @@ direction at that peak.
 ## Use
 
 ```sh
-./wind            # print and exit
-./wind --selftest # assert the pure helpers still behave
-watch -c -n 30 ./wind   # live, refreshing every 30s
+./wind             # print and exit
+./wind --watch     # live, repaint every 30s, q to quit
+./wind --watch 10  # ...every 10s
+./wind --selftest  # assert the pure helpers still behave
 ```
+
+`--watch` quits on `q`, Esc or Ctrl-C. Piped or run without a tty it just loops
+and prints, so `./wind --watch 60 >> wind.log` works too.
 
 Python 3 stdlib only, no dependencies.
 
-The forecast is cached in `$TMPDIR` for 15 minutes, so a 30s `watch` only
+The forecast is cached in `$TMPDIR` for 15 minutes, so a 30s repaint only
 re-hits the live station. Delete `/tmp/wind-fcst-*.json` to force a refetch.
 
 ## Adding a spot

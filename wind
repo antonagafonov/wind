@@ -4,7 +4,8 @@
 Row 1: current wind at each spot (windguru weather stations).
 Then per spot: today's remaining hours, then 4 day summaries.
 """
-import json, pathlib, sys, tempfile, time, urllib.request, datetime as dt
+import json, os, pathlib, select, sys, tempfile, termios, time, tty
+import urllib.request, datetime as dt
 
 SPOTS = [
     # label, id_spot, id_station
@@ -89,31 +90,31 @@ def day_summary(rows, day):
             "gust": peak["gust"], "dir": peak["dir"]}
 
 
-def main():
+def render():
     width = 4
-    print()
+    out = [""]
     for label, id_spot, id_station in SPOTS:
         s = get(q="station_data_current", id_station=id_station)
         if s.get("wind_avg") is None:
-            print(f"  {C['bold']}{label:<10}{C['off']} {col('no live data', 'dim')}")
+            out.append(f"  {C['bold']}{label:<10}{C['off']} {col('no live data', 'dim')}")
             continue
         avg, gust = s["wind_avg"], s["wind_max"]
-        print(f"  {C['bold']}{label:<10}{C['off']} "
-              f"{col(f'{avg:>5.1f} kt', paint(avg))} "
-              f"{col(f'g{gust:.1f}', paint(gust)):<12} "
-              f"{arrow(s['wind_direction'])} {compass(s['wind_direction'])}"
-              f"{s['wind_direction']:>4}°  {s['temperature']:.0f}°C"
-              f"  {col(s['datetime'][11:16], 'dim')}")
+        out.append(f"  {C['bold']}{label:<10}{C['off']} "
+                   f"{col(f'{avg:>5.1f} kt', paint(avg))} "
+                   f"{col(f'g{gust:.1f}', paint(gust)):<12} "
+                   f"{arrow(s['wind_direction'])} {compass(s['wind_direction'])}"
+                   f"{s['wind_direction']:>4}°  {s['temperature']:.0f}°C"
+                   f"  {col(s['datetime'][11:16], 'dim')}")
 
     now = dt.datetime.now(TZ)
     for label, id_spot, _ in SPOTS:
         rows = forecast(id_spot)
         today = [r for r in rows if r["t"].date() == now.date() and r["t"].hour >= now.hour]
-        print(f"\n  {C['bold']}{label}{C['off']}  {col('today', 'dim')}")
-        print("   " + "".join(f"{r['t'].hour:>{width}}" for r in today))
-        print("   " + "".join(col(f"{r['spd']:>{width}.0f}", paint(r["spd"])) for r in today))
-        print("   " + col("".join(f"{r['gust']:>{width}.0f}" for r in today), "dim"))
-        print("   " + "".join(f"{arrow(r['dir']):>{width}}" for r in today))
+        out.append(f"\n  {C['bold']}{label}{C['off']}  {col('today', 'dim')}")
+        out.append("   " + "".join(f"{r['t'].hour:>{width}}" for r in today))
+        out.append("   " + "".join(col(f"{r['spd']:>{width}.0f}", paint(r["spd"])) for r in today))
+        out.append("   " + col("".join(f"{r['gust']:>{width}.0f}" for r in today), "dim"))
+        out.append("   " + "".join(f"{arrow(r['dir']):>{width}}" for r in today))
 
         parts = []
         for n in range(1, 5):
@@ -125,8 +126,43 @@ def main():
                          + col(f"{d['lo']:.0f}-{d['hi']:.0f}", paint(d["hi"]))
                          + col(f"g{d['gust']:.0f}", "dim")
                          + f" {compass(d['dir'])}")
-        print("   " + "  ".join(parts))
-    print()
+        out.append("   " + "  ".join(parts))
+    return "\n".join(out) + "\n"
+
+
+def watch(interval):
+    """Repaint every `interval` seconds until q (or Ctrl-C)."""
+    fd = sys.stdin.fileno()
+    if not os.isatty(fd):  # ponytail: piped or in a cron job, no keys to read
+        while True:
+            print(render(), flush=True)
+            time.sleep(interval)
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write("\033[?25l")
+        while True:
+            frame = render()  # fetch first, so the screen is only blank while painting
+            sys.stdout.write("\033[H\033[2J" + frame
+                             + col(f"   q to quit · {interval}s\n", "dim"))
+            sys.stdout.flush()
+            if select.select([sys.stdin], [], [], interval)[0]:
+                if sys.stdin.read(1) in ("q", "Q", "\x03", "\x1b"):
+                    return
+    except KeyboardInterrupt:
+        return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+
+def main(argv):
+    if "--watch" in argv:
+        rest = argv[argv.index("--watch") + 1:]
+        watch(float(rest[0]) if rest and rest[0][0].isdigit() else 30)
+    else:
+        print(render(), end="")
 
 
 def selftest():
@@ -149,4 +185,4 @@ def selftest():
 
 
 if __name__ == "__main__":
-    selftest() if "--selftest" in sys.argv else main()
+    selftest() if "--selftest" in sys.argv else main(sys.argv[1:])
