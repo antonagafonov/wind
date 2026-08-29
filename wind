@@ -5,7 +5,7 @@ Row 1: current wind at each spot (windguru weather stations).
 Then per spot: today's remaining hours, then 4 day summaries.
 """
 import json, os, pathlib, select, sys, tempfile, termios, time, tty
-import urllib.request, datetime as dt
+import urllib.error, urllib.request, datetime as dt
 
 SPOTS = [
     # label, id_spot, id_station (None = forecast only)
@@ -148,6 +148,8 @@ USAGE = f"""usage: wind [SPOT...] [-a] [--watch [SECONDS]] [--alert [KT]]
   --watch   repaint every SECONDS (default 30); q, Esc or Ctrl-C quits.
   --alert   check once and Telegram any spot at or above KT (default {ALERT_KT:g});
             prints what it sent and exits. Built for cron.
+  --tg-chats  list chat ids the bot can see, to fill in WIND_TG_CHAT.
+  --tg-test   send a test message to the configured chat.
 
   wind                      {' and '.join(DEFAULT)}, print once
   wind -a                   all spots
@@ -166,33 +168,75 @@ def pick(names, show_all=False):
     return out
 
 
-def tg_config():
-    """Bot token and chat id from the environment, or ~/.config/wind/telegram.env."""
-    env = dict(os.environ)
-    cfg = (pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
-           / "wind" / "telegram.env")
-    if cfg.exists():
-        for line in cfg.read_text().splitlines():
+TG_CFG = (pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
+          / "wind" / "telegram.env")
+TG_HELP = f"""put your bot credentials in {TG_CFG} (or the environment):
+
+  mkdir -p {TG_CFG.parent}
+  cat > {TG_CFG} <<'EOF'
+  WIND_TG_TOKEN=123456:AA...    # @BotFather -> /token
+  WIND_TG_CHAT=-1001234567890   # or @publicchannelname
+  EOF
+  chmod 600 {TG_CFG}
+
+Add the bot to the channel as an admin, post anything there, then run
+`wind --tg-chats` to see the chat id."""
+
+
+def tg_env(key):
+    """Look up a WIND_TG_* value: environment first, then the config file."""
+    if os.environ.get(key):
+        return os.environ[key]
+    if TG_CFG.exists():
+        for line in TG_CFG.read_text().splitlines():
             line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                env.setdefault(k.strip(), v.strip().strip("\"'"))
-    token, chat = env.get("WIND_TG_TOKEN"), env.get("WIND_TG_CHAT")
-    if not token or not chat:
-        raise SystemExit(
-            f"set WIND_TG_TOKEN and WIND_TG_CHAT, or put them in {cfg}\n"
-            "  WIND_TG_TOKEN=123456:AA...   (from @BotFather)\n"
-            "  WIND_TG_CHAT=@windchannel    (or the numeric -100... id)")
-    return token, chat
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() == key:
+                return v.strip().strip("\"'").split("  #")[0].strip()
+    return None
+
+
+def tg_api(method, **payload):
+    token = tg_env("WIND_TG_TOKEN")
+    if not token:
+        raise SystemExit("no WIND_TG_TOKEN.\n\n" + TG_HELP)
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"telegram {method} failed: {e.read().decode()[:300]}")
+
+
+def tg_chats():
+    """List every chat the bot has recently seen, so you can grab the channel id."""
+    me = tg_api("getMe").get("result", {})
+    print(f"bot: @{me.get('username')} ({me.get('first_name')})\n")
+    seen = {}
+    for u in tg_api("getUpdates").get("result", []):
+        for key in ("message", "channel_post", "edited_channel_post", "my_chat_member"):
+            c = (u.get(key) or {}).get("chat")
+            if c:
+                seen[c["id"]] = c
+    if not seen:
+        print("no chats seen. Add the bot to the channel as an admin, post a\n"
+              "message there, then run this again. Telegram only reports chats\n"
+              "with recent activity.")
+        return
+    for cid, c in seen.items():
+        name = c.get("title") or c.get("username") or c.get("first_name") or ""
+        print(f"  WIND_TG_CHAT={cid}   {c.get('type'):<10} {name}")
 
 
 def telegram(text):
-    token, chat = tg_config()
-    body = json.dumps({"chat_id": chat, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                 data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.load(r)
+    chat = tg_env("WIND_TG_CHAT")
+    if not chat:
+        raise SystemExit("no WIND_TG_CHAT.\n\n" + TG_HELP)
+    return tg_api("sendMessage", chat_id=chat, text=text)
 
 
 def should_alert(state, label, kt, now, threshold, cooldown):
@@ -264,6 +308,13 @@ def watch(spots, interval):
 def main(argv):
     if {"-h", "--help"} & set(argv):
         print(USAGE, end="")
+        return
+    if "--tg-chats" in argv:
+        return tg_chats()
+    if "--tg-test" in argv:
+        r = tg_api("sendMessage", chat_id=tg_env("WIND_TG_CHAT") or "",
+                   text="\U0001F32C wind: test message, alerts are wired up.")
+        print("sent" if r.get("ok") else r)
         return
     threshold = None
     if "--alert" in argv:

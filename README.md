@@ -80,13 +80,24 @@ Credentials come from the environment, or from `~/.config/wind/telegram.env`:
 ```sh
 mkdir -p ~/.config/wind
 cat > ~/.config/wind/telegram.env <<'EOF'
-WIND_TG_TOKEN=123456:AA...      # from @BotFather
-WIND_TG_CHAT=@yourchannel       # or the numeric -100... id
+WIND_TG_TOKEN=123456:AA...      # @BotFather -> /token
+WIND_TG_CHAT=-1001234567890     # or @publicchannelname
 EOF
 chmod 600 ~/.config/wind/telegram.env
 ```
 
-Add the bot to the channel as an admin, otherwise Telegram rejects the send.
+Add the bot to the channel **as an admin**, or Telegram rejects the send. Then:
+
+```sh
+./wind --tg-chats   # lists every chat the bot can see, with its id
+./wind --tg-test    # sends one message, to prove the wiring
+```
+
+`--tg-chats` reads `getUpdates`, and Telegram only reports chats with recent
+activity — so post something in the channel first. Note that a bot with a
+webhook set, or one whose updates another process is already consuming, will
+show nothing here; grab the id from the channel's forwarded-message info
+instead.
 
 To stop it nagging: one alert per spot, then silence for 3 hours
 (`ALERT_COOLDOWN`). If the wind drops back under the threshold the spot re-arms
