@@ -14,6 +14,7 @@ SPOTS = [
     ("Tel Aviv", 1084913, 3169),
     ("Ashdod",   1118129, 3444),
 ]
+DEFAULT = ["Bat Galim", "Caesarea"]  # shown when no spot is named
 TZ = dt.timezone(dt.timedelta(hours=3))  # ponytail: Israel is UTC+3 in summer,
 # UTC+2 in winter. Swap for zoneinfo("Asia/Jerusalem") if you run this in January.
 GFS = 3
@@ -133,22 +134,23 @@ def render(spots):
     return "\n".join(out) + "\n"
 
 
-USAGE = f"""usage: wind [SPOT...] [--watch [SECONDS]]
+USAGE = f"""usage: wind [SPOT...] [-a] [--watch [SECONDS]]
 
   SPOT      any part of the name, case-insensitive; repeat to pick several.
             known: {', '.join(label for label, _, _ in SPOTS)}
+  -a/--all  every spot, not just the default {' + '.join(DEFAULT)}.
   --watch   repaint every SECONDS (default 30); q, Esc or Ctrl-C quits.
 
-  wind                      all spots, print once
-  wind bat cae              just Bat Galim and Caesarea
+  wind                      {' and '.join(DEFAULT)}, print once
+  wind -a                   all spots
   wind tel --watch 15       Tel Aviv, live
 """
 
 
-def pick(names):
-    """Filter SPOTS by case-insensitive substring. Empty names -> everything."""
+def pick(names, show_all=False):
+    """Filter SPOTS by case-insensitive substring. No names -> DEFAULT, or all."""
     if not names:
-        return list(SPOTS)
+        return list(SPOTS) if show_all else [s for s in SPOTS if s[0] in DEFAULT]
     out = [s for s in SPOTS if any(n.lower() in s[0].lower() for n in names)]
     if not out:
         raise SystemExit(f"no spot matches {' '.join(names)}\n\n{USAGE}")
@@ -194,7 +196,8 @@ def main(argv):
         interval = 30
         if i < len(argv) and argv[i].replace(".", "", 1).isdigit():
             interval = float(argv.pop(i))
-    spots = pick([a for a in argv if not a.startswith("-")])
+    show_all = bool({"-a", "--all"} & set(argv))
+    spots = pick([a for a in argv if not a.startswith("-")], show_all)
     watch(spots, interval) if interval else print(render(spots), end="")
 
 
@@ -214,7 +217,8 @@ def selftest():
          "WINDSPD": [5, 6], "GUST": [9, 10], "WINDDIR": [180, 190]}
     got = decode(f)
     assert got[0]["t"] == t and got[1]["spd"] == 6 and got[1]["dir"] == 190, got
-    assert pick([]) == list(SPOTS)
+    assert [x[0] for x in pick([])] == DEFAULT
+    assert pick([], show_all=True) == list(SPOTS)
     assert [x[0] for x in pick(["bat", "cae"])] == ["Bat Galim", "Caesarea"]
     assert [x[0] for x in pick(["ASHDOD"])] == ["Ashdod"]
     assert [x[0] for x in pick(["a"])] == [s[0] for s in SPOTS]  # substring, not prefix

@@ -26,16 +26,17 @@ direction at that peak.
 ## Use
 
 ```sh
-./wind                  # all spots, print and exit
-./wind bat cae          # just Bat Galim and Caesarea
+./wind                  # Bat Galim + Caesarea, print and exit
+./wind -a               # all four spots
 ./wind tel --watch 15   # Tel Aviv, live, repaint every 15s
-./wind --watch          # all spots, live, 30s
+./wind --watch          # the default two, live, 30s
 ./wind --help
 ./wind --selftest       # assert the pure helpers still behave
 ```
 
 Spot arguments are case-insensitive substrings of the label, so `bat`, `Bat`
-and `galim` all pick Bat Galim.
+and `galim` all pick Bat Galim. With no arguments you get the `DEFAULT` list at
+the top of the script; `-a` overrides it.
 
 `--watch` quits on `q`, Esc or Ctrl-C. Piped or run without a tty it just loops
 and prints, so `./wind --watch 60 >> wind.log` works too.
